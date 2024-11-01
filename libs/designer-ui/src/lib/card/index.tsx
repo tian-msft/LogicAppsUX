@@ -47,6 +47,8 @@ export interface CardProps {
   runData?: LogicAppsV2.WorkflowRunAction | LogicAppsV2.WorkflowRunTrigger;
   setFocus?: boolean;
   isSecureInputsOutputs?: boolean;
+  showParameters?: boolean;
+  parameters?: React.ReactNode;
 }
 
 export interface BadgeProps {
@@ -85,6 +87,8 @@ export const Card: React.FC<CardProps> = memo(
     runData,
     setFocus,
     isSecureInputsOutputs,
+    showParameters,
+    parameters,
   }) => {
     const handleClick: React.MouseEventHandler<HTMLElement> = (e) => {
       e.stopPropagation();
@@ -214,6 +218,7 @@ export const Card: React.FC<CardProps> = memo(
             nodeIndex={nodeIndex}
           />
         </div>
+        {showParameters && parameters}
       </div>
     );
   }

@@ -514,6 +514,11 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
       };
     });
 
+  const parameterSection = (
+    <div style={{ margin: '16px' }}>
+      <SettingsSection nodeId={id} settings={settings} expanded={true} showHeading={false} />
+    </div>
+  );
   return (
     <>
       <div className="nopan" ref={ref as any}>
@@ -546,8 +551,10 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
           staticResultsEnabled={!!staticResults}
           isSecureInputsOutputs={isSecureInputsOutputs}
           nodeIndex={nodeIndex}
+          showParameters={settings !== undefined}
+          parameters={parameterSection}
         />
-        {settings && <SettingsSection nodeId={id} settings={settings} expanded={true} showHeading={false} />}
+        {/* {settings && <SettingsSection nodeId={id} settings={settings} expanded={true} showHeading={false} />} */}
         {showCopyCallout ? <CopyTooltip targetRef={ref} hideTooltip={clearCopyTooltip} /> : null}
         <Handle className="node-handle bottom" type="source" position={sourcePosition} isConnectable={false} />
       </div>
