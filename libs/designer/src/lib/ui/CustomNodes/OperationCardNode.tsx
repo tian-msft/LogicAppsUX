@@ -1,9 +1,10 @@
 import constants from '../../common/constants';
 import { getMonitoringError } from '../../common/utilities/error';
-import type { AppDispatch } from '../../core';
+import { getExpressionTokenSections, getOutputTokenSections, type AppDispatch, type RootState } from '../../core';
 import { copyOperation } from '../../core/actions/bjsworkflow/copypaste';
 import { moveOperation } from '../../core/actions/bjsworkflow/move';
 import {
+  useHostOptions,
   useMonitoringView,
   useNodeSelectAdditionalCallback,
   useReadOnly,
@@ -18,6 +19,7 @@ import {
   useParameterValidationErrors,
   useTokenDependencies,
   useOperationVisuals,
+  useDependencies,
 } from '../../core/state/operation/operationSelector';
 import { useIsNodePinnedToOperationPanel, useIsNodeSelectedInOperationPanel } from '../../core/state/panel/panelSelectors';
 import { changePanelNode, setSelectedNodeId } from '../../core/state/panel/panelSlice';
@@ -41,21 +43,48 @@ import {
   useShouldNodeFocus,
   useParentRunId,
   useIsLeafNode,
+  useReplacedIds,
 } from '../../core/state/workflow/workflowSelectors';
 import { setRepetitionRunData } from '../../core/state/workflow/workflowSlice';
 import { getRepetitionName } from '../common/LoopsPager/helper';
 import { DropZone } from '../connections/dropzone';
 import { MessageBarType } from '@fluentui/react';
-import { isNullOrUndefined, RunService, useNodeIndex } from '@microsoft/logic-apps-shared';
-import { Card } from '@microsoft/designer-ui';
+import type { ParameterInfo, ValueSegment } from '@microsoft/logic-apps-shared';
+import {
+  equals,
+  getPropertyValue,
+  getRecordEntry,
+  isNullOrUndefined,
+  isRecordNotEmpty,
+  replaceWhiteSpaceWithUnderscore,
+  RunService,
+  TokenType,
+  useNodeIndex,
+} from '@microsoft/logic-apps-shared';
+import type { OutputToken, TokenPickerMode } from '@microsoft/designer-ui';
+import { Card, DynamicCallStatus, TokenPicker, TokenPickerButtonLocation } from '@microsoft/designer-ui';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useDrag } from 'react-dnd';
 import { useIntl } from 'react-intl';
 import { useQuery } from '@tanstack/react-query';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { CopyTooltip } from '../common/DesignerContextualMenu/CopyTooltip';
+import type { Settings } from '../settings/settingsection';
+import { SettingsSection } from '../settings/settingsection';
+import {
+  getTypeForTokenFiltering,
+  loadDynamicTreeItemsForParameter,
+  loadParameterValueFromString,
+  parameterValueToString,
+  remapEditorViewModelWithNewIds,
+  remapValueSegmentsWithNewIds,
+  shouldUseParameterInGroup,
+} from '../../core/utils/parameters/helper';
+import { getConnectionReference } from '../../core/utils/connectors/connections';
+import { getEditorAndOptions } from '../panel/nodeDetailsPanel/tabs/parametersTab';
+import { createValueSegmentFromToken } from '../../core/utils/tokens';
 
 const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.Bottom, id }: NodeProps) => {
   const readOnly = useReadOnly();
@@ -81,6 +110,38 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
 
   const suppressDefaultNodeSelect = useSuppressDefaultNodeSelectFunctionality();
   const nodeSelectCallbackOverride = useNodeSelectAdditionalCallback();
+
+  const nodeId = id;
+  const selectedNodeId = id;
+  const nodeType = useSelector((state: RootState) => state.operations.operationInfo[selectedNodeId]?.type);
+  const rootState = useSelector((state: RootState) => state);
+  const displayNameResult = useConnectorName(operationInfo);
+  const nodeDependencies = useDependencies(nodeId);
+  const nodeInputs = useMemo(
+    () => rootState.operations.inputParameters[id] ?? { parameterGroups: {} },
+    [id, rootState.operations.inputParameters]
+  );
+  const { variables, upstreamNodeIds, connectionReference, idReplacements, workflowParameters } = useSelector((state: RootState) => {
+    return {
+      upstreamNodeIds: getRecordEntry(state.tokens.outputTokens, nodeId)?.upstreamNodeIds,
+      variables: state.tokens.variables,
+      operationDefinition: getRecordEntry(state.workflow.newlyAddedOperations, nodeId)
+        ? undefined
+        : getRecordEntry(state.workflow.operations, nodeId),
+      connectionReference: getConnectionReference(state.connections, nodeId),
+      idReplacements: state.workflow.idReplacements,
+      workflowParameters: state.workflowParameters.definitions,
+    };
+  });
+  const { tokenState, workflowParametersState } = useSelector((state: RootState) => ({
+    tokenState: state.tokens,
+    workflowParametersState: state.workflowParameters,
+  }));
+  const replacedIds = useReplacedIds();
+  const tokenGroup = getOutputTokenSections(selectedNodeId, nodeType, tokenState, workflowParametersState, replacedIds);
+  const { hideUTFExpressions } = useHostOptions();
+  const expressionGroup = getExpressionTokenSections(hideUTFExpressions);
+  const nodeTitle = replaceWhiteSpaceWithUnderscore(useNodeDisplayName(id));
 
   const getRunRepetition = () => {
     if (parentRunData?.status === constants.FLOW_STATUS.SKIPPED) {
@@ -294,6 +355,165 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
 
   const nodeIndex = useNodeIndex(id);
 
+  const inputs = useSelector((state: RootState) => state.operations.inputParameters[id]);
+  const group = inputs?.parameterGroups['default'];
+
+  const getValueSegmentFromToken = useCallback(
+    async (
+      parameterId: string,
+      token: OutputToken,
+      addImplicitForeachIfNeeded: boolean,
+      addLatestActionName: boolean
+    ): Promise<ValueSegment> => {
+      return createValueSegmentFromToken(nodeId, parameterId, token, addImplicitForeachIfNeeded, addLatestActionName, rootState, dispatch);
+    },
+    [dispatch, nodeId, rootState]
+  );
+
+  const getPickerCallbacks = (parameter: ParameterInfo) => ({
+    getFileSourceName: (): string => {
+      return displayNameResult.result;
+    },
+    getDisplayValueFromSelectedItem: (selectedItem: any): string => {
+      const dependency = nodeDependencies.inputs[parameter.parameterKey];
+      return getPropertyValue(selectedItem, dependency.filePickerInfo?.fullTitlePath ?? '');
+    },
+    getValueFromSelectedItem: (selectedItem: any): string => {
+      const dependency = nodeDependencies.inputs[parameter.parameterKey];
+      return getPropertyValue(selectedItem, dependency.filePickerInfo?.valuePath ?? '');
+    },
+    onFolderNavigation: (selectedItem: any | undefined): void => {
+      loadDynamicTreeItemsForParameter(
+        nodeId,
+        group.id,
+        parameter.id,
+        selectedItem,
+        operationInfo,
+        connectionReference,
+        nodeInputs,
+        nodeDependencies,
+        true /* showErrorWhenNotReady */,
+        dispatch,
+        idReplacements,
+        workflowParameters
+      );
+    },
+  });
+
+  const getTokenPicker = (
+    parameterId: string,
+    editorId: string,
+    labelId: string,
+    tokenPickerMode?: TokenPickerMode,
+    editorType?: string,
+    isCodeEditor?: boolean,
+    tokenClickedCallback?: (token: ValueSegment) => void
+  ): JSX.Element => {
+    const parameterType =
+      editorType ?? (nodeInputs.parameterGroups[group.id].parameters.find((param) => param.id === parameterId) ?? {})?.type;
+    const supportedTypes: string[] = getPropertyValue(constants.TOKENS, getTypeForTokenFiltering(parameterType));
+
+    const filteredTokenGroup = tokenGroup.map((group) => ({
+      ...group,
+      tokens: group.tokens.filter((token: OutputToken) => {
+        if (isCodeEditor) {
+          return !(
+            token.outputInfo.type === TokenType.VARIABLE ||
+            token.outputInfo.type === TokenType.PARAMETER ||
+            token.outputInfo.arrayDetails ||
+            token.key === constants.UNTIL_CURRENT_ITERATION_INDEX_KEY ||
+            token.key === constants.FOREACH_CURRENT_ITEM_KEY
+          );
+        }
+        return supportedTypes.some((supportedType) => {
+          return !Array.isArray(token.type) && equals(supportedType, token.type);
+        });
+      }),
+    }));
+
+    return (
+      <TokenPicker
+        editorId={editorId}
+        labelId={labelId}
+        tokenGroup={tokenGroup}
+        filteredTokenGroup={filteredTokenGroup}
+        expressionGroup={expressionGroup}
+        hideUTFExpressions={hideUTFExpressions}
+        initialMode={tokenPickerMode}
+        getValueSegmentFromToken={(token: OutputToken, addImplicitForeach: boolean) =>
+          getValueSegmentFromToken(parameterId, token, addImplicitForeach, !!isCodeEditor)
+        }
+        tokenClickedCallback={tokenClickedCallback}
+      />
+    );
+  };
+
+  const settings: Settings[] = group?.parameters
+    .filter((x) => !x.hideInUI && shouldUseParameterInGroup(x, group.parameters))
+    .map((param) => {
+      const { id, label, value, required, showTokens, placeholder, editorViewModel, dynamicData, conditionalVisibility, validationErrors } =
+        param;
+      const remappedEditorViewModel = isRecordNotEmpty(idReplacements)
+        ? remapEditorViewModelWithNewIds(editorViewModel, idReplacements)
+        : editorViewModel;
+      const paramSubset = {
+        id,
+        label,
+        required,
+        showTokens,
+        placeholder,
+        editorViewModel: remappedEditorViewModel,
+        conditionalVisibility,
+      };
+      const { editor, editorOptions } = getEditorAndOptions(operationInfo, param, upstreamNodeIds ?? [], variables);
+
+      const { value: remappedValues } = isRecordNotEmpty(idReplacements) ? remapValueSegmentsWithNewIds(value, idReplacements) : { value };
+      const isCodeEditor = editor?.toLowerCase() === constants.EDITOR.CODE;
+
+      return {
+        settingType: 'SettingTokenField',
+        settingProp: {
+          ...paramSubset,
+          readOnly,
+          value: remappedValues,
+          editor,
+          editorOptions,
+          tokenEditor: true,
+          isLoading: dynamicData?.status === DynamicCallStatus.STARTED,
+          errorDetails: dynamicData?.error ? { message: dynamicData.error.message } : undefined,
+          validationErrors,
+          tokenMapping: {},
+          nodeTitle,
+          loadParameterValueFromString: (value: string) => loadParameterValueFromString(value),
+          onValueChange: () => {}, // onValueChange(id, newState),
+          onComboboxMenuOpen: () => {}, //onComboboxMenuOpen(param),
+          pickerCallbacks: getPickerCallbacks(param),
+          tokenpickerButtonProps: {
+            location: TokenPickerButtonLocation.Left,
+          },
+          suppressCastingForSerialize: false,
+          onCastParameter: (value: ValueSegment[], type?: string, format?: string, suppressCasting?: boolean) =>
+            parameterValueToString(
+              {
+                value,
+                type: type ?? 'string',
+                info: { format },
+                suppressCasting,
+              } as ParameterInfo,
+              false,
+              idReplacements
+            ) ?? '',
+          getTokenPicker: (
+            editorId: string,
+            labelId: string,
+            tokenPickerMode?: TokenPickerMode,
+            editorType?: string,
+            tokenClickedCallback?: (token: ValueSegment) => void
+          ) => getTokenPicker(id, editorId, labelId, tokenPickerMode, editorType, isCodeEditor, tokenClickedCallback),
+        },
+      };
+    });
+
   return (
     <>
       <div className="nopan" ref={ref as any}>
@@ -327,6 +547,7 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
           isSecureInputsOutputs={isSecureInputsOutputs}
           nodeIndex={nodeIndex}
         />
+        {settings && <SettingsSection nodeId={id} settings={settings} expanded={true} showHeading={false} />}
         {showCopyCallout ? <CopyTooltip targetRef={ref} hideTooltip={clearCopyTooltip} /> : null}
         <Handle className="node-handle bottom" type="source" position={sourcePosition} isConnectable={false} />
       </div>
