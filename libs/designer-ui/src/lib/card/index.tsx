@@ -183,7 +183,7 @@ export const Card: React.FC<CardProps> = memo(
         style={getCardStyle(brandColor)}
         data-testid={`card-${title}`}
         data-automation-id={`card-${replaceWhiteSpaceWithUnderscore(title)}`}
-        onClick={handleClick}
+        onClick={undefined}
         onContextMenu={onContextMenu}
         onKeyDown={keyboardInteraction.keyDown}
         tabIndex={nodeIndex}
@@ -214,7 +214,12 @@ export const Card: React.FC<CardProps> = memo(
                 title="showParametersPane"
                 ariaLabel="showParametersPane"
               />
-              <IconButton iconProps={{ iconName: 'ChevronDown' }} title="showParametersInline" ariaLabel="showParametersInline" />
+              <IconButton
+                onClick={handleClick}
+                iconProps={{ iconName: 'ChevronDown' }}
+                title="showParametersInline"
+                ariaLabel="showParametersInline"
+              />
             </div>
             {errorMessage ? <ErrorBanner errorLevel={errorLevel} errorMessage={errorMessage} /> : null}
           </div>
