@@ -142,6 +142,7 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
   const { hideUTFExpressions } = useHostOptions();
   const expressionGroup = getExpressionTokenSections(hideUTFExpressions);
   const nodeTitle = replaceWhiteSpaceWithUnderscore(useNodeDisplayName(id));
+  const [showParameters, setShowParameters] = useState(false);
 
   const getRunRepetition = () => {
     if (parentRunData?.status === constants.FLOW_STATUS.SKIPPED) {
@@ -246,9 +247,17 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
     }
   }, [dispatch, id, nodeSelectCallbackOverride, suppressDefaultNodeSelect]);
 
-  const nodeClick = useCallback(() => {
-    handleNodeSelection();
-  }, [handleNodeSelection]);
+  const nodeClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      handleNodeSelection();
+      event.stopPropagation();
+    },
+    [handleNodeSelection]
+  );
+
+  const toggleShowParameters = () => {
+    setShowParameters(!showParameters);
+  };
 
   const onContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -542,7 +551,7 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
           isMonitoringView={isMonitoringView}
           runData={runData}
           readOnly={readOnly}
-          onClick={nodeClick}
+          onClick={toggleShowParameters}
           onContextMenu={onContextMenu}
           onDeleteClick={deleteClick}
           onCopyClick={copyClick}
@@ -551,8 +560,9 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
           staticResultsEnabled={!!staticResults}
           isSecureInputsOutputs={isSecureInputsOutputs}
           nodeIndex={nodeIndex}
-          showParameters={settings !== undefined}
+          showParameters={settings !== undefined && showParameters}
           parameters={parameterSection}
+          onExpandIconClick={nodeClick}
         />
         {/* {settings && <SettingsSection nodeId={id} settings={settings} expanded={true} showHeading={false} />} */}
         {showCopyCallout ? <CopyTooltip targetRef={ref} hideTooltip={clearCopyTooltip} /> : null}

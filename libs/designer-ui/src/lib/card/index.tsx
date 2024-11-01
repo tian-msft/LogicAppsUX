@@ -7,7 +7,7 @@ import { Gripper } from './images/dynamicsvgs/gripper';
 import type { CommentBoxProps } from './types';
 import { getCardStyle } from './utils';
 import type { MessageBarType } from '@fluentui/react';
-import { Icon, css } from '@fluentui/react';
+import { Icon, IconButton, css } from '@fluentui/react';
 import { Spinner } from '@fluentui/react-components';
 import type { LogicAppsV2 } from '@microsoft/logic-apps-shared';
 import { replaceWhiteSpaceWithUnderscore } from '@microsoft/logic-apps-shared';
@@ -49,6 +49,7 @@ export interface CardProps {
   isSecureInputsOutputs?: boolean;
   showParameters?: boolean;
   parameters?: React.ReactNode;
+  onExpandIconClick?(event: React.MouseEvent<HTMLButtonElement>): void;
 }
 
 export interface BadgeProps {
@@ -89,6 +90,7 @@ export const Card: React.FC<CardProps> = memo(
     isSecureInputsOutputs,
     showParameters,
     parameters,
+    onExpandIconClick,
   }) => {
     const handleClick: React.MouseEventHandler<HTMLElement> = (e) => {
       e.stopPropagation();
@@ -206,6 +208,13 @@ export const Card: React.FC<CardProps> = memo(
               <div className="panel-card-top-content">
                 <div className="panel-msla-title">{title}</div>
               </div>
+              <IconButton
+                onClick={onExpandIconClick}
+                iconProps={{ iconName: 'BackToWindow' }}
+                title="showParametersPane"
+                ariaLabel="showParametersPane"
+              />
+              <IconButton iconProps={{ iconName: 'ChevronDown' }} title="showParametersInline" ariaLabel="showParametersInline" />
             </div>
             {errorMessage ? <ErrorBanner errorLevel={errorLevel} errorMessage={errorMessage} /> : null}
           </div>
