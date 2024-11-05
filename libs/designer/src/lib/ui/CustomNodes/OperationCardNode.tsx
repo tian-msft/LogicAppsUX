@@ -61,8 +61,8 @@ import {
   TokenType,
   useNodeIndex,
 } from '@microsoft/logic-apps-shared';
-import type { OutputToken, TokenPickerMode } from '@microsoft/designer-ui';
-import { Card, DynamicCallStatus, TokenPicker, TokenPickerButtonLocation } from '@microsoft/designer-ui';
+import type { ChangeState, OutputToken, TokenPickerMode } from '@microsoft/designer-ui';
+import { Card, DynamicCallStatus, isCustomCode, TokenPicker, TokenPickerButtonLocation } from '@microsoft/designer-ui';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useDrag } from 'react-dnd';
 import { useIntl } from 'react-intl';
@@ -76,15 +76,19 @@ import { SettingsSection } from '../settings/settingsection';
 import {
   getTypeForTokenFiltering,
   loadDynamicTreeItemsForParameter,
+  loadDynamicValuesForParameter,
   loadParameterValueFromString,
   parameterValueToString,
   remapEditorViewModelWithNewIds,
   remapValueSegmentsWithNewIds,
   shouldUseParameterInGroup,
+  updateParameterAndDependencies,
 } from '../../core/utils/parameters/helper';
 import { getConnectionReference } from '../../core/utils/connectors/connections';
 import { getEditorAndOptions } from '../panel/nodeDetailsPanel/tabs/parametersTab';
 import { createValueSegmentFromToken } from '../../core/utils/tokens';
+import { updateVariableInfo } from '../../core/state/tokens/tokensSlice';
+import { addOrUpdateCustomCode } from '../../core/state/customcode/customcodeSlice';
 
 const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.Bottom, id }: NodeProps) => {
   const readOnly = useReadOnly();
@@ -121,18 +125,20 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
     () => rootState.operations.inputParameters[id] ?? { parameterGroups: {} },
     [id, rootState.operations.inputParameters]
   );
-  const { variables, upstreamNodeIds, connectionReference, idReplacements, workflowParameters } = useSelector((state: RootState) => {
-    return {
-      upstreamNodeIds: getRecordEntry(state.tokens.outputTokens, nodeId)?.upstreamNodeIds,
-      variables: state.tokens.variables,
-      operationDefinition: getRecordEntry(state.workflow.newlyAddedOperations, nodeId)
-        ? undefined
-        : getRecordEntry(state.workflow.operations, nodeId),
-      connectionReference: getConnectionReference(state.connections, nodeId),
-      idReplacements: state.workflow.idReplacements,
-      workflowParameters: state.workflowParameters.definitions,
-    };
-  });
+  const { variables, upstreamNodeIds, operationDefinition, connectionReference, idReplacements, workflowParameters } = useSelector(
+    (state: RootState) => {
+      return {
+        upstreamNodeIds: getRecordEntry(state.tokens.outputTokens, nodeId)?.upstreamNodeIds,
+        variables: state.tokens.variables,
+        operationDefinition: getRecordEntry(state.workflow.newlyAddedOperations, nodeId)
+          ? undefined
+          : getRecordEntry(state.workflow.operations, nodeId),
+        connectionReference: getConnectionReference(state.connections, nodeId),
+        idReplacements: state.workflow.idReplacements,
+        workflowParameters: state.workflowParameters.definitions,
+      };
+    }
+  );
   const { tokenState, workflowParametersState } = useSelector((state: RootState) => ({
     tokenState: state.tokens,
     workflowParametersState: state.workflowParameters,
@@ -457,6 +463,76 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
     );
   };
 
+  const onValueChange = useCallback(
+    (id: string, newState: ChangeState) => {
+      // Skip for nodes without group.id. (ex. Default node)
+      if (!group?.id) {
+        return;
+      }
+
+      const { value, viewModel } = newState;
+      const parameter = nodeInputs.parameterGroups[group.id].parameters.find((param: any) => param.id === id);
+
+      const propertiesToUpdate = {
+        value,
+        preservedValue: undefined,
+      } as Partial<ParameterInfo>;
+
+      if (viewModel !== undefined) {
+        propertiesToUpdate.editorViewModel = viewModel;
+      }
+
+      // TODO: This should never be added, since the update is taken care by dynamic parameter update.
+      if (getRecordEntry(variables, nodeId)) {
+        if (parameter?.parameterKey === 'inputs.$.name') {
+          dispatch(updateVariableInfo({ id: nodeId, name: value[0]?.value }));
+        } else if (parameter?.parameterKey === 'inputs.$.type') {
+          dispatch(updateVariableInfo({ id: nodeId, type: value[0]?.value }));
+        }
+      }
+
+      if (isCustomCode(parameter?.editor, parameter?.editorOptions?.language)) {
+        const { fileData, fileExtension, fileName } = viewModel.customCodeData;
+        dispatch(addOrUpdateCustomCode({ nodeId, fileData, fileExtension, fileName }));
+      }
+
+      dispatch(
+        updateParameterAndDependencies({
+          nodeId,
+          groupId: group?.id,
+          parameterId: id,
+          properties: propertiesToUpdate,
+          isTrigger: !!isTrigger,
+          operationInfo,
+          connectionReference,
+          nodeInputs,
+          dependencies: nodeDependencies,
+          operationDefinition,
+        })
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodeId, group?.id, isTrigger, operationInfo, connectionReference, nodeInputs, dependencies, variables, dispatch, operationDefinition]
+  );
+
+  const onComboboxMenuOpen = (parameter: ParameterInfo): void => {
+    if (parameter.dynamicData?.status === DynamicCallStatus.FAILED || parameter.dynamicData?.status === DynamicCallStatus.NOTSTARTED) {
+      loadDynamicValuesForParameter(
+        nodeId,
+        group.id,
+        parameter.id,
+        operationInfo,
+        connectionReference,
+        nodeInputs,
+        nodeDependencies,
+        true /* showErrorWhenNotReady */,
+        dispatch,
+        idReplacements,
+        workflowParameters
+      );
+    }
+  };
+
   const settings: Settings[] = group?.parameters
     .filter((x) => !x.hideInUI && shouldUseParameterInGroup(x, group.parameters))
     .map((param) => {
@@ -494,8 +570,8 @@ const DefaultNode = ({ targetPosition = Position.Top, sourcePosition = Position.
           tokenMapping: {},
           nodeTitle,
           loadParameterValueFromString: (value: string) => loadParameterValueFromString(value),
-          onValueChange: () => {}, // onValueChange(id, newState),
-          onComboboxMenuOpen: () => {}, //onComboboxMenuOpen(param),
+          onValueChange: (newState: ChangeState) => onValueChange(id, newState),
+          onComboboxMenuOpen: () => onComboboxMenuOpen(param),
           pickerCallbacks: getPickerCallbacks(param),
           tokenpickerButtonProps: {
             location: TokenPickerButtonLocation.Left,
